@@ -1,37 +1,54 @@
 package com.shlokmestry.traffic.api;
 
 import com.shlokmestry.traffic.ratelimit.TokenBucketRateLimiter;
+import com.shlokmestry.traffic.rules.RateLimitRule;
+import com.shlokmestry.traffic.rules.RuleStore;
 import jakarta.validation.Valid;
-import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RestController;
+import org.springframework.http.HttpStatus;
+import org.springframework.web.bind.annotation.*;
 
 @RestController
 @RequestMapping("/v1")
 public class RateLimitController {
 
     private final TokenBucketRateLimiter limiter;
+    private final RuleStore rules;
 
-    public RateLimitController(TokenBucketRateLimiter limiter) {
+    public RateLimitController(TokenBucketRateLimiter limiter, RuleStore rules) {
         this.limiter = limiter;
+        this.rules = rules;
     }
 
     @PostMapping("/check")
     public CheckRateLimitResponse check(@Valid @RequestBody CheckRateLimitRequest req) {
-        // Hardcoded rule for now
-        int capacity = 10;
-        double refillPerSecond = 5.0;
+        RateLimitRule rule = rules.get(req.ruleId())
+                .orElseThrow(() -> new RuleNotFound(req.ruleId())); // fail-closed
+
+        int cost = req.cost().intValue();
+        if (cost > rule.maxCost()) {
+            throw new CostTooHigh("cost " + cost + " exceeds maxCost " + rule.maxCost());
+        }
 
         TokenBucketRateLimiter.Result r =
                 limiter.checkAndConsume(
                         req.key(),
-                        req.ruleId(),
-                        capacity,
-                        refillPerSecond,
-                        req.cost().intValue()
+                        rule.ruleId(),
+                        rule.capacity(),
+                        rule.refillTokensPerSecond(),
+                        cost,
+                        rule.ttlMs()
                 );
 
         return new CheckRateLimitResponse(r.allowed(), r.retryAfterMs(), r.remaining());
+    }
+
+    @ResponseStatus(HttpStatus.NOT_FOUND)
+    private static class RuleNotFound extends RuntimeException {
+        RuleNotFound(String ruleId) { super("Rule not found: " + ruleId); }
+    }
+
+    @ResponseStatus(HttpStatus.BAD_REQUEST)
+    private static class CostTooHigh extends RuntimeException {
+        CostTooHigh(String msg) { super(msg); }
     }
 }

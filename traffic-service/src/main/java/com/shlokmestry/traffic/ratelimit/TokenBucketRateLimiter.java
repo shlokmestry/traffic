@@ -21,13 +21,16 @@ public class TokenBucketRateLimiter {
         this.script = RedisScript.of(new ClassPathResource("lua/token_bucket.lua"), List.class);
     }
 
-    public Result checkAndConsume(String key, String ruleId, int capacity, double refillTokensPerSecond, int cost) {
+    public Result checkAndConsume(
+            String key,
+            String ruleId,
+            int capacity,
+            double refillTokensPerSecond,
+            int cost,
+            long ttlMs
+    ) {
         long nowMs = clock.millis();
         String redisKey = "tb:" + ruleId + ":" + key;
-
-        // Keep the bucket around briefly after last use, then let Redis delete it.
-        // PEXPIRE expects milliseconds. [web:519]
-        long ttlMs = 120_000L; // 2 minutes
 
         List<?> res = redis.execute(
                 script,
@@ -40,7 +43,7 @@ public class TokenBucketRateLimiter {
         );
 
         if (res == null || res.size() < 3) {
-            return new Result(true, 0, -1); // fail-open for now
+            return new Result(true, 0, -1); // you can tighten later
         }
 
         boolean allowed = ((Number) res.get(0)).intValue() == 1;
