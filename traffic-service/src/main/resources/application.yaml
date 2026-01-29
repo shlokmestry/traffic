@@ -8,12 +8,9 @@ spring:
 
 server:
   port: 8081
-  error:
-    include-message: always
-    include-binding-errors: always
 
 management:
   endpoints:
     web:
       exposure:
-        include: health,info,metrics,mappings
+        include: health,info
