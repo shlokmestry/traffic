@@ -3,6 +3,7 @@
 -- ARGV[2] = capacity (integer)
 -- ARGV[3] = refillTokensPerSecond (number, can be fractional)
 -- ARGV[4] = cost (integer)
+-- ARGV[5] = ttlMs (integer)
 
 local key = KEYS[1]
 
@@ -10,6 +11,7 @@ local now = tonumber(ARGV[1])
 local capacity = tonumber(ARGV[2])
 local refillPerSec = tonumber(ARGV[3])
 local cost = tonumber(ARGV[4])
+local ttlMs = tonumber(ARGV[5])
 
 local tokensStr = redis.call('HGET', key, 'tokens')
 local lastRefillStr = redis.call('HGET', key, 'last_refill_ms')
@@ -36,6 +38,12 @@ end
 
 -- Save state
 redis.call('HSET', key, 'tokens', tokens, 'last_refill_ms', now)
+
+-- Ensure the bucket expires so Redis doesn't grow forever.
+-- PEXPIRE sets TTL in milliseconds.
+if ttlMs and ttlMs > 0 then
+  redis.call('PEXPIRE', key, ttlMs)
+end
 
 -- Compute retryAfterMs if not allowed
 local retryAfterMs = 0
