@@ -25,13 +25,18 @@ public class TokenBucketRateLimiter {
         long nowMs = clock.millis();
         String redisKey = "tb:" + ruleId + ":" + key;
 
+        // Keep the bucket around briefly after last use, then let Redis delete it.
+        // PEXPIRE expects milliseconds. [web:519]
+        long ttlMs = 120_000L; // 2 minutes
+
         List<?> res = redis.execute(
                 script,
                 List.of(redisKey),
                 String.valueOf(nowMs),
                 String.valueOf(capacity),
                 String.valueOf(refillTokensPerSecond),
-                String.valueOf(cost)
+                String.valueOf(cost),
+                String.valueOf(ttlMs)
         );
 
         if (res == null || res.size() < 3) {
