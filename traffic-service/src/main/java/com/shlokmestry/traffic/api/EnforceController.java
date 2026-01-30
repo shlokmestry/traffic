@@ -50,24 +50,31 @@ public class EnforceController {
                 rule.ttlMs()
         );
 
+        long remaining = Math.max(0, r.remaining());
+
+        // Common headers (sent on both 204 and 429)
+        HttpHeaders h = new HttpHeaders();
+        h.set("RateLimit-Limit", String.valueOf(rule.capacity()));
+        h.set("RateLimit-Remaining", String.valueOf(remaining));
+
         if (r.allowed()) {
-            return ResponseEntity.noContent().build();
+            h.set("RateLimit-Reset", "0");
+            return ResponseEntity.noContent().headers(h).build();
         }
 
-        // If refill rate is 0, the wait time is effectively infinite; return a sane Retry-After.
+        long retryAfterSeconds;
         if (rule.refillTokensPerSecond() <= 0.0) {
-            return ResponseEntity.status(429)
-                    .header(HttpHeaders.RETRY_AFTER, String.valueOf(RETRY_AFTER_SECONDS_IF_NO_REFILL))
-                    .body(new ErrorBody("rate_limited", "Too many requests"));
+            retryAfterSeconds = RETRY_AFTER_SECONDS_IF_NO_REFILL;
+        } else {
+            retryAfterSeconds = Math.max(1, (long) Math.ceil(r.retryAfterMs() / 1000.0));
+            retryAfterSeconds = Math.min(retryAfterSeconds, RETRY_AFTER_SECONDS_MAX);
         }
 
-        long retryAfterMs = r.retryAfterMs();
-
-        long retryAfterSeconds = Math.max(1, (long) Math.ceil(retryAfterMs / 1000.0));
-        retryAfterSeconds = Math.min(retryAfterSeconds, RETRY_AFTER_SECONDS_MAX);
+        h.set(HttpHeaders.RETRY_AFTER, String.valueOf(retryAfterSeconds));
+        h.set("RateLimit-Reset", String.valueOf(retryAfterSeconds));
 
         return ResponseEntity.status(429)
-                .header(HttpHeaders.RETRY_AFTER, String.valueOf(retryAfterSeconds))
+                .headers(h)
                 .body(new ErrorBody("rate_limited", "Too many requests"));
     }
 
