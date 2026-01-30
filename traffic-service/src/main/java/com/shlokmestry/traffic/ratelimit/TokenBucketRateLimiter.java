@@ -3,24 +3,46 @@ package com.shlokmestry.traffic.ratelimit;
 import java.time.Clock;
 import java.util.List;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.RedisScript;
 import org.springframework.stereotype.Service;
 
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
+
 @Service
 public class TokenBucketRateLimiter {
 
+    private static final Logger log = LoggerFactory.getLogger(TokenBucketRateLimiter.class);
     private static final long FAIL_CLOSED_RETRY_AFTER_MS = 1000L;
 
     private final StringRedisTemplate redis;
     private final Clock clock;
     private final RedisScript<List> script;
 
-    public TokenBucketRateLimiter(StringRedisTemplate redis) {
+    private final Counter failClosedRedisError;
+    private final Counter failClosedBadResponse;
+    private final Counter failClosedBadTypes;
+
+    public TokenBucketRateLimiter(StringRedisTemplate redis, MeterRegistry meterRegistry) {
         this.redis = redis;
         this.clock = Clock.systemUTC();
         this.script = RedisScript.of(new ClassPathResource("lua/token_bucket.lua"), List.class);
+
+        this.failClosedRedisError = Counter.builder("ratelimit.fail_closed.total")
+                .tag("reason", "redis_error")
+                .register(meterRegistry);
+
+        this.failClosedBadResponse = Counter.builder("ratelimit.fail_closed.total")
+                .tag("reason", "bad_response")
+                .register(meterRegistry);
+
+        this.failClosedBadTypes = Counter.builder("ratelimit.fail_closed.total")
+                .tag("reason", "bad_types")
+                .register(meterRegistry);
     }
 
     public Result checkAndConsume(
@@ -46,12 +68,14 @@ public class TokenBucketRateLimiter {
                     String.valueOf(ttlMs)
             );
         } catch (Exception e) {
-            // Fail-closed: if Redis/script execution fails, deny the request.
+            failClosedRedisError.increment();
+            log.warn("Fail-closed: Redis/script error for ruleId={}, key={}", ruleId, key, e);
             return new Result(false, FAIL_CLOSED_RETRY_AFTER_MS, 0);
         }
 
-        // Fail-closed: if we can’t read a valid response, deny the request.
         if (res == null || res.size() < 3 || res.get(0) == null || res.get(1) == null || res.get(2) == null) {
+            failClosedBadResponse.increment();
+            log.warn("Fail-closed: invalid script response for ruleId={}, key={}, res={}", ruleId, key, res);
             return new Result(false, FAIL_CLOSED_RETRY_AFTER_MS, 0);
         }
 
@@ -63,7 +87,8 @@ public class TokenBucketRateLimiter {
             retryAfterMs = ((Number) res.get(1)).longValue();
             remaining = ((Number) res.get(2)).longValue();
         } catch (ClassCastException e) {
-            // Fail-closed: unexpected types from Lua/Redis.
+            failClosedBadTypes.increment();
+            log.warn("Fail-closed: unexpected script response types for ruleId={}, key={}, res={}", ruleId, key, res, e);
             return new Result(false, FAIL_CLOSED_RETRY_AFTER_MS, 0);
         }
 

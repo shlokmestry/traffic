@@ -21,6 +21,7 @@ public class EnforceController {
 
     private static final long RETRY_AFTER_SECONDS_IF_NO_REFILL = 3600; // 1 hour
     private static final long RETRY_AFTER_SECONDS_MAX = 86400;         // 24 hours
+    private static final long FAIL_CLOSED_RETRY_AFTER_SECONDS = 1;     // 1 second
 
     private final TokenBucketRateLimiter limiter;
     private final RuleStore rules;
@@ -41,14 +42,28 @@ public class EnforceController {
                     .body(new ErrorBody("cost_too_high", "cost exceeds maxCost"));
         }
 
-        TokenBucketRateLimiter.Result r = limiter.checkAndConsume(
-                req.key(),
-                rule.ruleId(),
-                rule.capacity(),
-                rule.refillTokensPerSecond(),
-                cost,
-                rule.ttlMs()
-        );
+        final TokenBucketRateLimiter.Result r;
+        try {
+            r = limiter.checkAndConsume(
+                    req.key(),
+                    rule.ruleId(),
+                    rule.capacity(),
+                    rule.refillTokensPerSecond(),
+                    cost,
+                    rule.ttlMs()
+            );
+        } catch (Exception e) {
+            // Fail-closed at API boundary: Redis down / script errors should not cause HTTP 500.
+            HttpHeaders h = new HttpHeaders();
+            h.set("RateLimit-Limit", String.valueOf(rule.capacity()));
+            h.set("RateLimit-Remaining", "0");
+            h.set(HttpHeaders.RETRY_AFTER, String.valueOf(FAIL_CLOSED_RETRY_AFTER_SECONDS));
+            h.set("RateLimit-Reset", String.valueOf(FAIL_CLOSED_RETRY_AFTER_SECONDS));
+
+            return ResponseEntity.status(429)
+                    .headers(h)
+                    .body(new ErrorBody("rate_limited", "Rate limiter unavailable"));
+        }
 
         long remaining = Math.max(0, r.remaining());
 
