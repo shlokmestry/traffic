@@ -3,8 +3,6 @@ package com.shlokmestry.traffic.ratelimit;
 import java.time.Clock;
 import java.util.List;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.RedisScript;
@@ -16,8 +14,7 @@ import io.micrometer.core.instrument.MeterRegistry;
 @Service
 public class TokenBucketRateLimiter {
 
-    private static final Logger log = LoggerFactory.getLogger(TokenBucketRateLimiter.class);
-    private static final long FAIL_CLOSED_RETRY_AFTER_MS = 1000L;
+    private static final long FAIL_CLOSED_RETRY_AFTER_MS = 1000;
 
     private final StringRedisTemplate redis;
     private final Clock clock;
@@ -27,22 +24,22 @@ public class TokenBucketRateLimiter {
     private final Counter failClosedBadResponse;
     private final Counter failClosedBadTypes;
 
-    public TokenBucketRateLimiter(StringRedisTemplate redis, MeterRegistry meterRegistry) {
+    public TokenBucketRateLimiter(StringRedisTemplate redis, MeterRegistry registry) {
         this.redis = redis;
         this.clock = Clock.systemUTC();
         this.script = RedisScript.of(new ClassPathResource("lua/token_bucket.lua"), List.class);
 
         this.failClosedRedisError = Counter.builder("ratelimit.fail_closed.total")
                 .tag("reason", "redis_error")
-                .register(meterRegistry);
+                .register(registry);
 
         this.failClosedBadResponse = Counter.builder("ratelimit.fail_closed.total")
                 .tag("reason", "bad_response")
-                .register(meterRegistry);
+                .register(registry);
 
         this.failClosedBadTypes = Counter.builder("ratelimit.fail_closed.total")
                 .tag("reason", "bad_types")
-                .register(meterRegistry);
+                .register(registry);
     }
 
     public Result checkAndConsume(
@@ -69,30 +66,23 @@ public class TokenBucketRateLimiter {
             );
         } catch (Exception e) {
             failClosedRedisError.increment();
-            log.warn("Fail-closed: Redis/script error for ruleId={}, key={}", ruleId, key, e);
             return new Result(false, FAIL_CLOSED_RETRY_AFTER_MS, 0);
         }
 
-        if (res == null || res.size() < 3 || res.get(0) == null || res.get(1) == null || res.get(2) == null) {
+        if (res == null || res.size() < 3) {
             failClosedBadResponse.increment();
-            log.warn("Fail-closed: invalid script response for ruleId={}, key={}, res={}", ruleId, key, res);
             return new Result(false, FAIL_CLOSED_RETRY_AFTER_MS, 0);
         }
 
-        final boolean allowed;
-        final long retryAfterMs;
-        final long remaining;
         try {
-            allowed = ((Number) res.get(0)).intValue() == 1;
-            retryAfterMs = ((Number) res.get(1)).longValue();
-            remaining = ((Number) res.get(2)).longValue();
-        } catch (ClassCastException e) {
+            boolean allowed = ((Number) res.get(0)).intValue() == 1;
+            long retryAfterMs = ((Number) res.get(1)).longValue();
+            long remaining = ((Number) res.get(2)).longValue();
+            return new Result(allowed, retryAfterMs, remaining);
+        } catch (RuntimeException e) {
             failClosedBadTypes.increment();
-            log.warn("Fail-closed: unexpected script response types for ruleId={}, key={}, res={}", ruleId, key, res, e);
             return new Result(false, FAIL_CLOSED_RETRY_AFTER_MS, 0);
         }
-
-        return new Result(allowed, retryAfterMs, remaining);
     }
 
     public record Result(boolean allowed, long retryAfterMs, long remaining) {}

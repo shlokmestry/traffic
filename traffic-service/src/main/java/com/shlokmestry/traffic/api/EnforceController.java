@@ -33,8 +33,15 @@ public class EnforceController {
 
     @PostMapping("/enforce")
     public ResponseEntity<?> enforce(@Valid @RequestBody CheckRateLimitRequest req) {
-        RateLimitRule rule = rules.get(req.ruleId())
-                .orElseThrow(() -> new RuleNotFound(req.ruleId())); // fail-closed
+        // FAIL-CLOSED #1: Always have a rule (even if RedisRuleStore fails)
+        RateLimitRule rule;
+        try {
+            rule = rules.get(req.ruleId())
+                    .orElseThrow(() -> new RuleNotFound(req.ruleId()));
+        } catch (Exception e) {
+            // RedisRuleStore.get() failed → ultra-conservative defaults
+            rule = new RateLimitRule(req.ruleId(), 1, 0.0, 1, 60000);
+        }
 
         int cost = req.cost().intValue();
         if (cost > rule.maxCost()) {
@@ -42,6 +49,7 @@ public class EnforceController {
                     .body(new ErrorBody("cost_too_high", "cost exceeds maxCost"));
         }
 
+        // FAIL-CLOSED #2: Limiter failures (your existing logic)
         final TokenBucketRateLimiter.Result r;
         try {
             r = limiter.checkAndConsume(
