@@ -18,12 +18,13 @@
   <name>traffic-service</name>
   <description>Distributed rate limiting service (Traffic)</description>
 
-<properties>
-    <java.version>25</java.version>
-    <maven.compiler.release>25</maven.compiler.release>
-    <testcontainers.version>1.19.7</testcontainers.version>
-</properties>
+  <properties>
+    <java.version>17</java.version>
+    <maven.compiler.release>17</maven.compiler.release>
 
+    <!-- Needed because you reference ${testcontainers.version} below -->
+    <testcontainers.version>1.19.7</testcontainers.version>
+  </properties>
 
   <dependencyManagement>
     <dependencies>
@@ -38,7 +39,6 @@
   </dependencyManagement>
 
   <dependencies>
-
     <dependency>
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-starter-web</artifactId>
@@ -52,6 +52,13 @@
     <dependency>
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-starter-actuator</artifactId>
+    </dependency>
+
+    <!-- Enables /actuator/prometheus when you expose the endpoint in application.yml -->
+    <dependency>
+      <groupId>io.micrometer</groupId>
+      <artifactId>micrometer-registry-prometheus</artifactId>
+      <scope>runtime</scope>
     </dependency>
 
     <dependency>
@@ -72,13 +79,12 @@
       <scope>test</scope>
     </dependency>
 
-    <!-- Testcontainers JUnit 5 integration -->
+    <!-- Testcontainers JUnit 5 integration (version comes from the BOM) -->
     <dependency>
       <groupId>org.testcontainers</groupId>
       <artifactId>junit-jupiter</artifactId>
       <scope>test</scope>
     </dependency>
-
   </dependencies>
 
   <build>

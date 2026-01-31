@@ -1,6 +1,7 @@
 spring:
   application:
     name: traffic-service
+
   data:
     redis:
       host: localhost
@@ -13,4 +14,4 @@ management:
   endpoints:
     web:
       exposure:
-        include: health,info
+        include: health,info,prometheus
