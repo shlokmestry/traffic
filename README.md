@@ -1,81 +1,83 @@
-# Distributed Rate Limiting Service 🚦
+traffic-service 🚦
+A centralized distributed rate limiting service for shared APIs
+traffic-service is a centralized service that determines whether a request should be allowed or blocked — consistently and safely — across all your services.
+It enforces rate limits using a Redis-backed Token Bucket with atomic Lua execution, ensuring correct behavior even when multiple app instances are running.
+You integrate it the same way you call any internal service:
+check the rate limit before processing the request.
 
-A centralized distributed rate limiting service that protects shared APIs from abuse, traffic spikes, and accidental overload.
+___________________________________________________________________________________________________
 
-You integrate it the same way you normally call your backend — just add a rate-limit check before the request is processed.
+Why does this exist?
+Rate limiting implemented independently in each service usually leads to:
+inconsistent enforcement across teams
+race conditions in distributed systems
+poor burst handling
+duplicated logic
+limited observability when failures happen
+traffic-service centralizes rate limiting so enforcement is predictable, burst-friendly, and operationally visible.
 
----
+___________________________________________________________________________________________________
 
-## When should I use this?
+When should I use this?
+Use traffic-service when:
+You have shared APIs used by multiple teams or customers
+You run multiple service instances and need correct enforcement
+You want burst support (Token Bucket), not fixed windows
+You need safe behavior during Redis failures
+You want metrics you can alert on
 
-Use **distributed-rate-limiter** when:
+Features
+Token Bucket algorithm (burst-friendly)
+Atomic updates using Redis + Lua
+Consistent enforcement across instances
+Fail-closed behavior to protect downstream services
+Prometheus metrics for observability
+Grafana-ready dashboards
+Low-latency: one Redis call per request
 
-- You have shared APIs used by multiple teams/customers
-- You want consistent rate limiting across many backend services
-- You need burst support (not just fixed windows)
-- You run multiple app instances and still need correct enforcement
-- You want clear operational signals (metrics + dashboards)
+___________________________________________________________________________________________________
 
-This service helps you enforce fair usage while keeping latency low.
+Quick Start:
+Start Redis and the service:
+docker compose up --build
 
----
+Check a rate limit:
+curl -X POST http://localhost:8080/ratelimit/check \
+  -H "Content-Type: application/json" \
+  -d '{
+    "ruleId": "api-read",
+    "identity": "user_123"
+  }'
+  
+Response:
+{
+  "allowed": true,
+  "remaining": 42,
+  "retryAfterMs": 0
+}
 
-## Features
+___________________________________________________________________________________________________
 
-- Token Bucket algorithm (burst-friendly)
-- Distributed-safe atomic updates via Redis + Lua script
-- Fail-closed safety mode when Redis is unhealthy (protects downstream services)
-- Metrics for failure modes (`ratelimit.failclosed.total{reason=...}`)
-- Grafana-ready dashboard signals (Service Up, 5xx rate, fail-closed events)
+How it works
+Each request sends { ruleId, identity } to traffic-service
+A Redis Lua script:
+refills tokens based on elapsed time
+consumes a token if available
+executes atomically
+The result is returned to the caller
+No race conditions.
+No cross-node coordination.
 
----
+___________________________________________________________________________________________________
 
-## How it works
-
-Each identity (API key / user / IP) has a token bucket stored in Redis.  
-On every request, the service runs a Redis Lua script that refills tokens based on elapsed time and consumes tokens if available — all **atomically**.
-
-The script returns:
-- `allowed` (0/1)
-- `retryAfterMs`
-- `remaining`
-
-If Redis is unavailable or the script response is invalid, the service **fails closed** and increments `ratelimit.failclosed.total` with a reason tag.
-
----
-
-## Installation
-
-### Prerequisites
-- Redis running locally on `localhost:6379`
-- Java + your build tool (Maven/Gradle)
-
-### Config
-`application.yaml` uses Redis at `localhost:6379` by default.
-
-### Run
-Use your normal Spring Boot run command (Maven or Gradle).
-
----
-
-## Usage
-
-> Update the endpoint path below to match your controller (send me your endpoint and I’ll fill this in exactly).
-
-Example flow:
-1) Call the rate limiter with `{ruleId, identity}`.
-2) If allowed: continue to backend.
-3) If blocked: return HTTP 429 + retry-after info.
-
----
-
-## Metrics & dashboards
-
-PromQL examples used in Grafana:
-
-```promql
-# 5xx rate (5m)
-sum(rate(http_server_requests_seconds_count{job="traffic-service", outcome="SERVER_ERROR"}[5m])) or on() vector(0)
-
-# Fail-closed events (5m)
-sum(increase(ratelimit_failclosed_total{job="traffic-service"}[5m])) or on() vector(0)
+Usage pattern
+Typical gateway flow:
+Call traffic-service
+If allowed = true → forward request
+If allowed = false → return HTTP 429
+Example blocked response:
+{
+  "allowed": false,
+  "remaining": 0,
+  "retryAfterMs": 1200
+}
