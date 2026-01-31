@@ -1,4 +1,5 @@
-traffic-service 🚦
+Traffic Service 🚦
+
 A centralized distributed rate limiting service for shared APIs
 traffic-service is a centralized service that determines whether a request should be allowed or blocked — consistently and safely — across all your services.
 It enforces rate limits using a Redis-backed Token Bucket with atomic Lua execution, ensuring correct behavior even when multiple app instances are running.
