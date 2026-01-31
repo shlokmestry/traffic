@@ -8,19 +8,38 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.RedisScript;
 import org.springframework.stereotype.Service;
 
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
+
 @Service
 public class TokenBucketRateLimiter {
 
-    private static final long FAIL_CLOSED_RETRY_AFTER_MS = 1000L;
+    private static final long FAIL_CLOSED_RETRY_AFTER_MS = 1000;
 
     private final StringRedisTemplate redis;
     private final Clock clock;
     private final RedisScript<List> script;
 
-    public TokenBucketRateLimiter(StringRedisTemplate redis) {
+    private final Counter failClosedRedisError;
+    private final Counter failClosedBadResponse;
+    private final Counter failClosedBadTypes;
+
+    public TokenBucketRateLimiter(StringRedisTemplate redis, MeterRegistry registry) {
         this.redis = redis;
         this.clock = Clock.systemUTC();
         this.script = RedisScript.of(new ClassPathResource("lua/token_bucket.lua"), List.class);
+
+        this.failClosedRedisError = Counter.builder("ratelimit.fail_closed.total")
+                .tag("reason", "redis_error")
+                .register(registry);
+
+        this.failClosedBadResponse = Counter.builder("ratelimit.fail_closed.total")
+                .tag("reason", "bad_response")
+                .register(registry);
+
+        this.failClosedBadTypes = Counter.builder("ratelimit.fail_closed.total")
+                .tag("reason", "bad_types")
+                .register(registry);
     }
 
     public Result checkAndConsume(
@@ -46,28 +65,24 @@ public class TokenBucketRateLimiter {
                     String.valueOf(ttlMs)
             );
         } catch (Exception e) {
-            // Fail-closed: if Redis/script execution fails, deny the request.
+            failClosedRedisError.increment();
             return new Result(false, FAIL_CLOSED_RETRY_AFTER_MS, 0);
         }
 
-        // Fail-closed: if we can’t read a valid response, deny the request.
-        if (res == null || res.size() < 3 || res.get(0) == null || res.get(1) == null || res.get(2) == null) {
+        if (res == null || res.size() < 3) {
+            failClosedBadResponse.increment();
             return new Result(false, FAIL_CLOSED_RETRY_AFTER_MS, 0);
         }
 
-        final boolean allowed;
-        final long retryAfterMs;
-        final long remaining;
         try {
-            allowed = ((Number) res.get(0)).intValue() == 1;
-            retryAfterMs = ((Number) res.get(1)).longValue();
-            remaining = ((Number) res.get(2)).longValue();
-        } catch (ClassCastException e) {
-            // Fail-closed: unexpected types from Lua/Redis.
+            boolean allowed = ((Number) res.get(0)).intValue() == 1;
+            long retryAfterMs = ((Number) res.get(1)).longValue();
+            long remaining = ((Number) res.get(2)).longValue();
+            return new Result(allowed, retryAfterMs, remaining);
+        } catch (RuntimeException e) {
+            failClosedBadTypes.increment();
             return new Result(false, FAIL_CLOSED_RETRY_AFTER_MS, 0);
         }
-
-        return new Result(allowed, retryAfterMs, remaining);
     }
 
     public record Result(boolean allowed, long retryAfterMs, long remaining) {}
