@@ -60,8 +60,9 @@ class FailClosedWhenRedisDownIT {
 
     @Test
     void enforce_returns429_whenRedisUnavailable() throws Exception {
-        // Rule exists => controller will reach limiter (not 404). [file:5]
-        ruleStore.upsert(new RateLimitRule("rule-1", 5, 1.0, 60_000, 5));
+        // Rule exists => controller will reach limiter (not 404).
+        // Phase 5 constructor: ruleId, endpoint, plan, capacity, refill, burst, ttlMs, maxCost
+        ruleStore.upsert(new RateLimitRule("rule-1", "test-endpoint", "default", 5, 1.0, 0, 60_000L, 5));
 
         // Build JSON manually to avoid needing Jackson on the test classpath
         String json = """
@@ -76,7 +77,7 @@ class FailClosedWhenRedisDownIT {
 
         HttpResponse<String> resp = http.send(req, HttpResponse.BodyHandlers.ofString());
 
-        assertThat(resp.statusCode()).isEqualTo(429); // fail-closed surfaces as 429 [file:5]
-        assertThat(resp.headers().firstValue(HttpHeaders.RETRY_AFTER)).isPresent(); // controller sets it on 429 [file:5]
+        assertThat(resp.statusCode()).isEqualTo(429); // fail-closed surfaces as 429
+        assertThat(resp.headers().firstValue(HttpHeaders.RETRY_AFTER)).isPresent(); // controller sets it on 429
     }
 }

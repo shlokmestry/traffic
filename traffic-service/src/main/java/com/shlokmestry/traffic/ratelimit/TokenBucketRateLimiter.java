@@ -45,13 +45,16 @@ public class TokenBucketRateLimiter {
     public Result checkAndConsume(
             String key,
             String ruleId,
+            String endpoint,
+            String plan,
             int capacity,
             double refillTokensPerSecond,
+            int burstCapacity,
             int cost,
             long ttlMs
     ) {
         long nowMs = clock.millis();
-        String redisKey = "tb:" + ruleId + ":" + key;
+        String redisKey = "tb:" + ruleId + ":" + endpoint + ":" + plan + ":" + key;
 
         final List<?> res;
         try {
@@ -61,6 +64,7 @@ public class TokenBucketRateLimiter {
                     String.valueOf(nowMs),
                     String.valueOf(capacity),
                     String.valueOf(refillTokensPerSecond),
+                    String.valueOf(burstCapacity),
                     String.valueOf(cost),
                     String.valueOf(ttlMs)
             );

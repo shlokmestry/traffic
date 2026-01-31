@@ -22,7 +22,7 @@ public class RateLimitController {
     @PostMapping("/check")
     public CheckRateLimitResponse check(@Valid @RequestBody CheckRateLimitRequest req) {
         RateLimitRule rule = rules.get(req.ruleId())
-                .orElseThrow(() -> new RuleNotFound(req.ruleId())); // fail-closed
+                .orElseThrow(() -> new RuleNotFoundException(req.ruleId())); // fail-closed
 
         int cost = req.cost().intValue();
         if (cost > rule.maxCost()) {
@@ -33,18 +33,16 @@ public class RateLimitController {
                 limiter.checkAndConsume(
                         req.key(),
                         rule.ruleId(),
+                        rule.endpoint(),
+                        rule.plan(),
                         rule.capacity(),
                         rule.refillTokensPerSecond(),
+                        rule.burstCapacity(),
                         cost,
                         rule.ttlMs()
                 );
 
         return new CheckRateLimitResponse(r.allowed(), r.retryAfterMs(), r.remaining());
-    }
-
-    @ResponseStatus(HttpStatus.NOT_FOUND)
-    private static class RuleNotFound extends RuntimeException {
-        RuleNotFound(String ruleId) { super("Rule not found: " + ruleId); }
     }
 
     @ResponseStatus(HttpStatus.BAD_REQUEST)

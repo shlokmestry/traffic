@@ -20,8 +20,8 @@ import jakarta.validation.Valid;
 public class EnforceController {
 
     private static final long RETRY_AFTER_SECONDS_IF_NO_REFILL = 3600; // 1 hour
-    private static final long RETRY_AFTER_SECONDS_MAX = 86400;         // 24 hours
-    private static final long FAIL_CLOSED_RETRY_AFTER_SECONDS = 1;     // 1 second
+    private static final long RETRY_AFTER_SECONDS_MAX = 86400; // 24 hours
+    private static final long FAIL_CLOSED_RETRY_AFTER_SECONDS = 1; // 1 second
 
     private final TokenBucketRateLimiter limiter;
     private final RuleStore rules;
@@ -32,7 +32,7 @@ public class EnforceController {
     }
 
     @PostMapping("/enforce")
-    public ResponseEntity<?> enforce(@Valid @RequestBody CheckRateLimitRequest req) {
+    public ResponseEntity<ErrorBody> enforce(@Valid @RequestBody CheckRateLimitRequest req) {
         // FAIL-CLOSED #1: Always have a rule (even if RedisRuleStore fails)
         RateLimitRule rule;
         try {
@@ -40,7 +40,10 @@ public class EnforceController {
                     .orElseThrow(() -> new RuleNotFound(req.ruleId()));
         } catch (Exception e) {
             // RedisRuleStore.get() failed → ultra-conservative defaults
-            rule = new RateLimitRule(req.ruleId(), 1, 0.0, 1, 60000);
+            rule = new RateLimitRule(
+                req.ruleId(), 
+                "unknown", "default", 1, 0.0, 0, 1L, 60000
+            );
         }
 
         int cost = req.cost().intValue();
@@ -53,12 +56,15 @@ public class EnforceController {
         final TokenBucketRateLimiter.Result r;
         try {
             r = limiter.checkAndConsume(
-                    req.key(),
-                    rule.ruleId(),
-                    rule.capacity(),
-                    rule.refillTokensPerSecond(),
-                    cost,
-                    rule.ttlMs()
+                req.key(),
+                rule.ruleId(),
+                rule.endpoint(),      // NEW Phase 5
+                rule.plan(),          // NEW Phase 5
+                rule.capacity(),
+                rule.refillTokensPerSecond(),
+                rule.burstCapacity(), // NEW Phase 5
+                cost,
+                rule.ttlMs()
             );
         } catch (Exception e) {
             // Fail-closed at API boundary: Redis down / script errors should not cause HTTP 500.
@@ -105,6 +111,8 @@ public class EnforceController {
 
     @ResponseStatus(HttpStatus.NOT_FOUND)
     private static class RuleNotFound extends RuntimeException {
-        RuleNotFound(String ruleId) { super("Rule not found: " + ruleId); }
+        RuleNotFound(String ruleId) { 
+            super("Rule not found: " + ruleId); 
+        }
     }
 }
