@@ -1,5 +1,6 @@
 package com.shlokmestry.traffic.rules;
 
+import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
 
@@ -10,6 +11,8 @@ import org.springframework.stereotype.Repository;
 public class RedisRuleStore implements RuleStore {
 
     private static final String PREFIX = "rule:";
+    private static final String DEFAULT_ENDPOINT = "unknown";
+    private static final String DEFAULT_PLAN = "default";
 
     private final StringRedisTemplate redis;
 
@@ -23,16 +26,17 @@ public class RedisRuleStore implements RuleStore {
 
     @Override
     public void upsert(RateLimitRule rule) {
-        // Use a Redis hash: one key per rule, fields per attribute. [web:922]
-        redis.opsForHash().putAll(
-                key(rule.ruleId()),
-                Map.of(
-                        "capacity", String.valueOf(rule.capacity()),
-                        "refillTokensPerSecond", String.valueOf(rule.refillTokensPerSecond()),
-                        "ttlMs", String.valueOf(rule.ttlMs()),
-                        "maxCost", String.valueOf(rule.maxCost())
-                )
-        );
+        // Map.of() rejects nulls, so build a mutable map safely.
+        Map<String, String> fields = new HashMap<>();
+        fields.put("endpoint", rule.endpoint() == null ? DEFAULT_ENDPOINT : rule.endpoint());
+        fields.put("plan", rule.plan() == null ? DEFAULT_PLAN : rule.plan());
+        fields.put("capacity", String.valueOf(rule.capacity()));
+        fields.put("refillTokensPerSecond", String.valueOf(rule.refillTokensPerSecond()));
+        fields.put("burstCapacity", String.valueOf(rule.burstCapacity()));
+        fields.put("ttlMs", String.valueOf(rule.ttlMs()));
+        fields.put("maxCost", String.valueOf(rule.maxCost()));
+
+        redis.opsForHash().putAll(key(rule.ruleId()), fields);
     }
 
     @Override
@@ -40,11 +44,18 @@ public class RedisRuleStore implements RuleStore {
         Map<Object, Object> m = redis.opsForHash().entries(key(ruleId));
         if (m == null || m.isEmpty()) return Optional.empty();
 
+        // Backward-compatible defaults if older rules were stored without new fields
+        String endpoint = (String) m.getOrDefault("endpoint", DEFAULT_ENDPOINT);
+        String plan = (String) m.getOrDefault("plan", DEFAULT_PLAN);
+
         int capacity = Integer.parseInt((String) m.get("capacity"));
         double refill = Double.parseDouble((String) m.get("refillTokensPerSecond"));
         long ttlMs = Long.parseLong((String) m.get("ttlMs"));
         int maxCost = Integer.parseInt((String) m.get("maxCost"));
 
-        return Optional.of(new RateLimitRule(ruleId, capacity, refill, ttlMs, maxCost));
+        String burstStr = (String) m.get("burstCapacity");
+        int burst = (burstStr == null) ? capacity : Integer.parseInt(burstStr);
+
+        return Optional.of(new RateLimitRule(ruleId, endpoint, plan, capacity, refill, burst, ttlMs, maxCost));
     }
 }

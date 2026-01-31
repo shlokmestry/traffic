@@ -18,11 +18,12 @@
   <name>traffic-service</name>
   <description>Distributed rate limiting service (Traffic)</description>
 
-  <properties>
-    <java.version>17</java.version>
-    <!-- Use a real Testcontainers line; 1.19.x is the stable family -->
+<properties>
+    <java.version>25</java.version>
+    <maven.compiler.release>25</maven.compiler.release>
     <testcontainers.version>1.19.7</testcontainers.version>
-  </properties>
+</properties>
+
 
   <dependencyManagement>
     <dependencies>
@@ -77,8 +78,6 @@
       <artifactId>junit-jupiter</artifactId>
       <scope>test</scope>
     </dependency>
-
-
 
   </dependencies>
 
