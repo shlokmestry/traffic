@@ -1,84 +1,100 @@
-Traffic Service 🚦
+# Traffic - Distributed Rate Limiting Service for Shared APIs 🚦
 
-A centralized distributed rate limiting service for shared APIs
-traffic-service is a centralized service that determines whether a request should be allowed or blocked — consistently and safely — across all your services.
-It enforces rate limits using a Redis-backed Token Bucket with atomic Lua execution, ensuring correct behavior even when multiple app instances are running.
-You integrate it the same way you call any internal service:
-check the rate limit before processing the request.
+A centralized, distributed rate limiting service that protects shared APIs from abuse and traffic spikes, enforcing consistent rules (per user/IP/API key) across multiple application instances.
 
-___________________________________________________________________________________________________
+Built as an independent service, it allows backend teams to apply consistent traffic control rules without embedding rate-limiting logic into each application.
 
-Why does this exist?
-Rate limiting implemented independently in each service usually leads to:
-inconsistent enforcement across teams
-race conditions in distributed systems
-poor burst handling
-duplicated logic
-limited observability when failures happen
-traffic-service centralizes rate limiting so enforcement is predictable, burst-friendly, and operationally visible.
+---
 
-___________________________________________________________________________________________________
+## When should I use this?
 
-When should I use this?
-Use traffic-service when:
-You have shared APIs used by multiple teams or customers
-You run multiple service instances and need correct enforcement
-You want burst support (Token Bucket), not fixed windows
-You need safe behavior during Redis failures
-You want metrics you can alert on
+Use this service when:
 
-Features
-Token Bucket algorithm (burst-friendly)
-Atomic updates using Redis + Lua
-Consistent enforcement across instances
-Fail-closed behavior to protect downstream services
-Prometheus metrics for observability
-Grafana-ready dashboards
-Low-latency: one Redis call per request
+- Multiple services share the same downstream API and need consistent throttling rules
+- You want centralized rule management instead of app-by-app configuration drift
+- You need low-latency enforcement that still behaves safely under partial failures (explicit fail-closed behavior)
 
-___________________________________________________________________________________________________
+---
 
-Quick Start:
-Start Redis and the service:
+## Tech stack
+
+- Java 17 (Spring Boot 4.x)
+- Redis (Spring Data Redis / `StringRedisTemplate`)
+- Token Bucket rate limiting with atomic Redis Lua script execution
+- Observability: Micrometer + Prometheus + Grafana
+- Containerization: Docker + Docker Compose
+- Testing: Spring Boot Test + integration test for fail-closed behavior
+
+---
+
+## Features
+
+- Distributed Token Bucket rate limiting with atomic updates via Redis + Lua
+- Central rule management (create/update and fetch rules)
+- Two enforcement styles:
+  - `/v1/check` for decisioning (allow/deny + remaining + retryAfter)
+  - `/v1/enforce` for gateway-friendly behavior (204/429 + RateLimit headers)
+- Fail-closed behavior when Redis is unavailable (safe throttling + `Retry-After`)
+- Metrics for allowed vs blocked requests and fail-closed reasons (Micrometer → Prometheus)
+
+---
+
+## How it works
+
+Rules are stored centrally in Redis and referenced by `ruleId`.
+
+Each request is evaluated using a Token Bucket stored in Redis and keyed by:
+`(ruleId, endpoint, plan, identityKey)`.
+
+Enforcement executes a Redis Lua script to refill tokens and consume request cost in a single atomic operation, returning:
+- `allowed`
+- `retryAfterMs`
+- `remaining`
+
+If Redis (or the limiter path) is unavailable, the service intentionally fails closed to protect downstream systems.
+
+---
+
+## API overview (v1)
+
+### Upsert a rule
+`PUT /v1/rules/{ruleId}` stores or updates a rule definition.
+
+### Get a rule
+`GET /v1/rules/{ruleId}` returns the current rule configuration.
+
+### Check (decision API)
+`POST /v1/check` returns an allow/deny decision plus `retryAfterMs` and remaining tokens.
+
+### Enforce (gateway-friendly)
+`POST /v1/enforce` returns:
+- `204 No Content` when allowed (with RateLimit headers)
+- `429 Too Many Requests` when blocked (with RateLimit headers + `Retry-After`)
+
+---
+
+## Installation
+
+You can run this service using Docker (recommended), or locally via Maven.
+
+### Option A: Run with Docker Compose (recommended)
+
+This repo includes a `docker-compose.yml` that runs:
+- Redis
+- `traffic-service` (built from this repo)
+
+```bash
 docker compose up --build
 
-Check a rate limit:
-curl -X POST http://localhost:8080/ratelimit/check \
-  -H "Content-Type: application/json" \
-  -d '{
-    "ruleId": "api-read",
-    "identity": "user_123"
-  }'
-  
-Response:
-{
-  "allowed": true,
-  "remaining": 42,
-  "retryAfterMs": 0
-}
+---
 
-___________________________________________________________________________________________________
+### Option B: Build a Docker image (Dockerfile)
 
-How it works
-Each request sends { ruleId, identity } to traffic-service
-A Redis Lua script:
-refills tokens based on elapsed time
-consumes a token if available
-executes atomically
-The result is returned to the caller
-No race conditions.
-No cross-node coordination.
+If you have a Dockerfile in the repo root, you can build and run the service directly.
 
-___________________________________________________________________________________________________
-
-Usage pattern
-Typical gateway flow:
-Call traffic-service
-If allowed = true → forward request
-If allowed = false → return HTTP 429
-Example blocked response:
-{
-  "allowed": false,
-  "remaining": 0,
-  "retryAfterMs": 1200
-}
+bash
+docker build -t traffic-service:local .
+docker run --rm -p 8081:8081 \
+  -e SPRING_DATA_REDIS_HOST=host.docker.internal \
+  -e SPRING_DATA_REDIS_PORT=6379 \
+  traffic-service:local
